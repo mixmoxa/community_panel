@@ -23,7 +23,7 @@ askp() { echo -e "${bold}${orange}$*${plain}"; }
 # ── Translations ─────────────────────────────────────────────────────────────
 T_EN[i_deps]="Installing dependencies";                  T_RU[i_deps]="Установка зависимостей"
 T_EN[i_bbr]="BBR enabled";                               T_RU[i_bbr]="BBR включен"
-T_EN[i_base]="3x-ui v2.4.7 configured on port %s; reverse-proxy will run after start"; T_RU[i_base]="3x-ui v2.4.7 настроена с портом %s, реверс-прокси запустится после старта"
+T_EN[i_base]="3x-ui v3.7.0 configured on port %s; reverse-proxy will run after start"; T_RU[i_base]="3x-ui v3.7.0 настроена с портом %s, реверс-прокси запустится после старта"
 T_EN[i_acme]="Installing acme.sh";                       T_RU[i_acme]="Установка acme.sh"
 T_EN[i_cert]="Issuing certificate for %s";               T_RU[i_cert]="Выпуск сертификата для %s"
 T_EN[i_cert_fail]="Certificate issue failed for %s";     T_RU[i_cert_fail]="Ошибка выпуска сертификата для %s"
@@ -31,7 +31,7 @@ T_EN[i_nginx]="Installing Nginx + JQ";                   T_RU[i_nginx]="Уста
 T_EN[i_startnginx]="Starting Nginx";                     T_RU[i_startnginx]="Запуск Nginx"
 T_EN[i_nginxtest]="Nginx config test failed:";           T_RU[i_nginxtest]="Ошибка проверки конфига Nginx:"
 T_EN[i_hy2]="Hysteria2 preconfigured inbound added";     T_RU[i_hy2]="Добавлен преднастроенный инбаунд Hysteria2"
-T_EN[i_preconfigured]="3x-ui v2.4.7 successfully installed"; T_RU[i_preconfigured]="3x-ui v2.4.7 успешно установлена"
+T_EN[i_preconfigured]="3x-ui v3.7.0 successfully installed"; T_RU[i_preconfigured]="3x-ui v3.7.0 успешно установлена"
 T_EN[p_dom_panel]="3x-ui domain:";                       T_RU[p_dom_panel]="Домен для 3x-ui:"
 T_EN[p_dom_sub]="Subscription page domain:";             T_RU[p_dom_sub]="Домен для подписок:"
 T_EN[p_dom_self]="Selfsteal/Reality domain:";            T_RU[p_dom_self]="Домен для сайта-заглушки:"
@@ -50,7 +50,7 @@ T_EN[s_decoy]="Selfsteal/Reality access link:";          T_RU[s_decoy]="Сайт
 T_EN[s_login]="Your login/password:";                    T_RU[s_login]="Ваш логин/пароль:"
 T_EN[s_entry]="secret cookie-gate link — save it!";      T_RU[s_entry]="секретная cookie-gate ссылка - сохраните!"
 T_EN[s_failed]="Reverse-proxy setup failed";             T_RU[s_failed]="Ошибка настройки реверс-прокси"
-T_EN[s_running]="3x-ui v2.4.7 installed and running";    T_RU[s_running]="3x-ui v2.4.7 установлена и работает"
+T_EN[s_running]="3x-ui v3.7.0 installed and running";    T_RU[s_running]="3x-ui v3.7.0 установлена и работает"
 T_EN[s_cli]="CLI manager commands are:";                 T_RU[s_cli]="Команды для управления:"
 
 # ── quiet-step UI ────────────────────────────────────────────────────────────
@@ -382,27 +382,25 @@ ssl_cert_issue() {
 }
 
 # ============================================================================
-# УСТАНОВКА ФИКСИРОВАННОЙ ВЕРСИИ 2.4.7 (существует в релизах)
+# УСТАНОВКА ПОСЛЕДНЕЙ СТАБИЛЬНОЙ ВЕРСИИ (v3.7.0)
 # ============================================================================
 
-install_xui_fixed() {
-    local TAG_VERSION="v2.4.7"
+install_xui_latest() {
+    local TAG_VERSION="v3.7.0"
     
-    echo -e "  ${gray}Установка 3x-ui ${TAG_VERSION} (стабильная версия)...${plain}"
+    echo -e "  ${gray}Установка 3x-ui ${TAG_VERSION}...${plain}"
     
     # Остановка старой версии
     systemctl stop x-ui 2>/dev/null
     rm -rf ${xui_folder}
     
-    # Скачивание фиксированной версии
+    # Скачивание версии
     local URL="https://github.com/MHSanaei/3x-ui/releases/download/${TAG_VERSION}/x-ui-linux-$(arch).tar.gz"
     local FILE="/tmp/x-ui-linux-$(arch).tar.gz"
     
     curl -4fsSL -o "$FILE" "$URL"
     if [[ $? -ne 0 ]]; then
         echo -e "${red}Ошибка скачивания версии ${TAG_VERSION}${plain}"
-        echo -e "${yellow}Попробуйте установить последнюю версию:${plain}"
-        echo -e "  bash <(curl -Ls https://raw.githubusercontent.com/MHSanaei/3x-ui/main/install.sh)"
         exit 1
     fi
     
@@ -432,7 +430,7 @@ install_xui_fixed() {
 }
 
 # ============================================================================
-# ОСТАЛЬНЫЕ ФУНКЦИИ
+# ИСПРАВЛЕННАЯ ФУНКЦИЯ _rp_preconfig ДЛЯ v3.7.0
 # ============================================================================
 
 rp_resolve_ip() {
@@ -442,6 +440,7 @@ rp_resolve_ip() {
 _rp_preconfig() {
     local U="$1" P="$2" PORT="$3" BP="$4" PD="$5" SD="$6" SS="$7" SP="$8" SOCK="$9" PANELPATH="${10}"
     local BASE="http://127.0.0.1:${PORT}/${BP}"
+    local API_BASE="${BASE}/panel/api"  # ← НОВЫЙ ПУТЬ ДЛЯ v3.7.0
     local JAR=$(mktemp)
     local CSRF ok i
 
@@ -449,16 +448,16 @@ _rp_preconfig() {
 
     # Ожидание запуска панели
     for i in $(seq 1 30); do
-        if curl -s -o /dev/null -w "%{http_code}" "$BASE/csrf-token" | grep -q "200"; then
+        if curl -s -o /dev/null -w "%{http_code}" "${API_BASE}/csrf-token" | grep -q "200"; then
             echo -e "  ${gray}API: панель запущена${plain}"
             break
         fi
         sleep 1
     done
 
-    # Получение CSRF токена
+    # Получение CSRF токена через новый API путь
     for i in $(seq 1 10); do
-        CSRF=$(curl -s -c "$JAR" "$BASE/csrf-token" | jq -r '.obj // empty')
+        CSRF=$(curl -s -c "$JAR" "${API_BASE}/csrf-token" | jq -r '.obj // empty')
         if [[ -n "$CSRF" && "$CSRF" != "null" ]]; then
             echo -e "  ${gray}API: CSRF токен получен${plain}"
             break
@@ -472,13 +471,13 @@ _rp_preconfig() {
         return 1
     fi
 
-    # Логин
+    # Логин через новый API путь
     for i in $(seq 1 10); do
         ok=$(curl -s -c "$JAR" -b "$JAR" \
             -H "X-CSRF-Token: $CSRF" \
             -H "Content-Type: application/json" \
             -d "{\"username\":\"$U\",\"password\":\"$P\"}" \
-            "$BASE/login" | jq -r '.success // empty')
+            "${API_BASE}/login" | jq -r '.success // empty')
         if [[ "$ok" == "true" ]]; then
             echo -e "  ${gray}API: авторизация успешна${plain}"
             break
@@ -496,12 +495,12 @@ _rp_preconfig() {
         curl -s -b "$JAR" -H "X-CSRF-Token: $CSRF" -H "Content-Type: application/json" "$@"
     }
 
-    # Генерация ключей
+    # Генерация ключей через новый API путь
     local X PRIV PUB UUID SID
-    X=$(api "$BASE/panel/api/server/getNewX25519Cert")
+    X=$(api "${API_BASE}/server/getNewX25519Cert")
     PRIV=$(echo "$X"|jq -r '.obj.privateKey')
     PUB=$(echo "$X"|jq -r '.obj.publicKey')
-    UUID=$(api "$BASE/panel/api/server/getNewUUID"|jq -r '.obj.uuid')
+    UUID=$(api "${API_BASE}/server/getNewUUID"|jq -r '.obj.uuid')
     SID=$(openssl rand -hex 8)
 
     [[ -n "$PRIV" && "$PRIV" != null && -n "$UUID" && "$UUID" != null ]] || { 
@@ -510,12 +509,12 @@ _rp_preconfig() {
         return 1
     }
 
-    # Настройка панели
+    # Настройка панели через новый API путь
     local WBP="$BP"
     [[ "$PANELPATH" == "/" ]] && WBP=""
 
     local ALL NEW
-    ALL=$(api "$BASE/panel/setting/all" -X POST)
+    ALL=$(api "${API_BASE}/setting/all" -X POST)
 
     NEW=$(echo "$ALL" | jq -c \
         --arg pd "$PD" \
@@ -541,7 +540,7 @@ _rp_preconfig() {
          .subCertFile = "" | 
          .subKeyFile = ""')
 
-    local UPDATE_RESULT=$(api "$BASE/panel/setting/update" -d "$NEW" | jq -r '.success // empty')
+    local UPDATE_RESULT=$(api "${API_BASE}/setting/update" -d "$NEW" | jq -r '.success // empty')
 
     if [[ "$UPDATE_RESULT" != "true" ]]; then
         echo -e "  ${red}setting/update failed.${plain}"
@@ -549,7 +548,7 @@ _rp_preconfig() {
         return 1
     fi
 
-    # Добавление Reality инбаунда (совместимый с v2.4.7)
+    # Добавление Reality инбаунда через новый API путь
     local IB
     IB=$(jq -n --arg u "$UUID" --arg pv "$PRIV" --arg pb "$PUB" --arg sid "$SID" --arg sni "$SS" --arg sock "$SOCK" '{
       enable:true,remark:"3x-ui VLESS",listen:"",port:443,protocol:"vless",expiryTime:0,total:0,
@@ -559,13 +558,13 @@ _rp_preconfig() {
         realitySettings:{show:false,xver:1,target:$sock,serverNames:[$sni],privateKey:$pv,minClientVer:"",maxClientVer:"",maxTimediff:0,shortIds:[$sid],settings:{publicKey:$pb,fingerprint:"firefox",serverName:"",spiderX:"/",mldsa65Verify:""}}},
       sniffing:{enabled:true,destOverride:["http","tls","quic"],metadataOnly:false,routeOnly:false,ipsExcluded:[],domainsExcluded:[]}}')
 
-    [[ "$(api "$BASE/panel/api/inbounds/add" -d "$IB"|jq -r '.success')" == "true" ]] || { 
+    [[ "$(api "${API_BASE}/inbounds/add" -d "$IB"|jq -r '.success')" == "true" ]] || { 
         echo -e "  ${red}inbound add failed.${plain}"
         rm -f "$JAR"
         return 1
     }
 
-    # Hysteria2 инбаунд
+    # Hysteria2 инбаунд через новый API путь
     local HYAUTH HYPASS
     HYAUTH=$(gen_random_string 16)
     HYPASS=$(gen_random_string 16)
@@ -583,20 +582,24 @@ _rp_preconfig() {
         finalmask:{quicParams:{congestion:"force-brutal",brutalUp:"650000000",brutalDown:"850000000",initStreamReceiveWindow:8388608,maxStreamReceiveWindow:8388608,initConnectionReceiveWindow:20971520,maxConnectionReceiveWindow:20971520,keepAlivePeriod:5,maxIncomingStreams:1024}}},
       sniffing:{enabled:true,destOverride:["http","tls","quic"]}}')
 
-    if [[ "$(api "$BASE/panel/api/inbounds/add" -d "$HY"|jq -r '.success')" == "true" ]]; then
+    if [[ "$(api "${API_BASE}/inbounds/add" -d "$HY"|jq -r '.success')" == "true" ]]; then
         echo -e "  ${green}✔${plain} $(t i_hy2)"
     else
         echo -e "  ${yellow}! Hysteria2 inbound add failed (Reality still works); add it manually if needed.${plain}"
     fi
 
-    # Перезапуск
-    api "$BASE/panel/api/server/restartXrayService" -X POST > /dev/null
-    api "$BASE/panel/setting/restartPanel" -X POST > /dev/null
+    # Перезапуск через новый API путь
+    api "${API_BASE}/server/restartXrayService" -X POST > /dev/null
+    api "${API_BASE}/setting/restartPanel" -X POST > /dev/null
 
     rm -f "$JAR"
     echo -e "  ${green}✔${plain} $(t i_preconfigured)"
     return 0
 }
+
+# ============================================================================
+# ОСТАЛЬНЫЕ ФУНКЦИИ (без изменений)
+# ============================================================================
 
 setup_reverse_proxy() {
     local RP_USER="$1" RP_PASS="$2" RP_PORT="$3" RP_BP="$4"
@@ -808,7 +811,7 @@ choose_language() {
     local c=""
     echo
     echo -e "  ${green}Select CLI locale / Выберите язык CLI:${plain}"
-    echo-e "    ${green}1${plain}. English"
+    echo -e "    ${green}1${plain}. English"
     echo -e "    ${green}2${plain}. Русский"
     [[ -t 0 ]] && read -rp "  [1-2] (default 1): " c
     case "$c" in 2) XUI_LANG="ru" ;; *) XUI_LANG="en" ;; esac
@@ -820,7 +823,7 @@ echo -e "  ${gray}Running…${plain}"
 choose_language
 install_base
 enable_bbr_default
-install_xui_fixed
+install_xui_latest
 
 # Настройка
 config_after_install
@@ -832,7 +835,7 @@ sleep 3
 setup_reverse_proxy "$RP_U" "$RP_P" "$RP_PORT" "$RP_BP" \
     || echo -e "${red}$(t s_failed)${plain}"
 
-echo -e "${green}✔ $(printf "$(t s_running)" "v2.4.7")${plain}"
+echo -e "${green}✔ $(printf "$(t s_running)" "v3.7.0")${plain}"
 echo
 echo -e "  ${gray}$(t s_cli)${plain}"
 echo -e "    ${blue}x-ui${plain}                    admin management menu"
