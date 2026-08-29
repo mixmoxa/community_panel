@@ -382,8 +382,170 @@ ssl_cert_issue() {
 }
 
 # ============================================================================
-#  REVERSE PROXY SETUP — адаптирован для 3x-ui
+# ИСПРАВЛЕННАЯ ФУНКЦИЯ _rp_preconfig
 # ============================================================================
+_rp_preconfig() {
+    local U="$1" P="$2" PORT="$3" BP="$4" PD="$5" SD="$6" SS="$7" SP="$8" SOCK="$9" PANELPATH="${10}"
+    local BASE="http://127.0.0.1:${PORT}/${BP}" JAR; JAR=$(mktemp)
+    local CSRF ok i
+    
+    echo -e "  ${gray}API: ожидание запуска панели...${plain}"
+    
+    # Ожидание запуска панели с увеличенным таймаутом
+    for i in $(seq 1 30); do
+        if curl -s -o /dev/null -w "%{http_code}" "$BASE/csrf-token" | grep -q "200"; then
+            echo -e "  ${gray}API: панель запущена${plain}"
+            break
+        fi
+        sleep 1
+    done
+    
+    # Получение CSRF токена
+    for i in $(seq 1 10); do
+        CSRF=$(curl -s -c "$JAR" "$BASE/csrf-token" | jq -r '.obj // empty')
+        if [[ -n "$CSRF" && "$CSRF" != "null" ]]; then
+            echo -e "  ${gray}API: CSRF токен получен${plain}"
+            break
+        fi
+        sleep 1
+    done
+    
+    if [[ -z "$CSRF" || "$CSRF" == "null" ]]; then
+        echo -e "  ${red}Не удалось получить CSRF токен${plain}"
+        rm -f "$JAR"
+        return 1
+    fi
+    
+    # Логин в панель
+    for i in $(seq 1 10); do
+        ok=$(curl -s -c "$JAR" -b "$JAR" \
+            -H "X-CSRF-Token: $CSRF" \
+            -H "Content-Type: application/json" \
+            -d "{\"username\":\"$U\",\"password\":\"$P\"}" \
+            "$BASE/login" | jq -r '.success // empty')
+        if [[ "$ok" == "true" ]]; then
+            echo -e "  ${gray}API: авторизация успешна${plain}"
+            break
+        fi
+        sleep 1
+    done
+    
+    if [[ "$ok" != "true" ]]; then
+        echo -e "  ${red}Panel API login failed (panel not ready at ${BASE}).${plain}"
+        rm -f "$JAR"
+        return 1
+    fi
+    
+    api() { 
+        curl -s -b "$JAR" -H "X-CSRF-Token: $CSRF" -H "Content-Type: application/json" "$@"
+    }
+
+    # Генерация ключей
+    local X PRIV PUB UUID SID
+    X=$(api "$BASE/panel/api/server/getNewX25519Cert")
+    PRIV=$(echo "$X"|jq -r '.obj.privateKey')
+    PUB=$(echo "$X"|jq -r '.obj.publicKey')
+    UUID=$(api "$BASE/panel/api/server/getNewUUID"|jq -r '.obj.uuid')
+    SID=$(openssl rand -hex 8)
+    
+    [[ -n "$PRIV" && "$PRIV" != null && -n "$UUID" && "$UUID" != null ]] || { 
+        echo -e "  ${red}Key/UUID generation failed.${plain}"
+        rm -f "$JAR"
+        return 1
+    }
+
+    # Настройка панели через API
+    local WBP="$BP"
+    [[ "$PANELPATH" == "/" ]] && WBP=""
+    
+    local ALL NEW
+    ALL=$(api "$BASE/panel/setting/all" -X POST)
+    
+    NEW=$(echo "$ALL" | jq -c \
+        --arg pd "$PD" \
+        --arg sd "$SD" \
+        --arg su "https://$SD/" \
+        --arg sju "https://$SD/json/" \
+        --argjson sp "$SP" \
+        --arg wbp "$WBP" \
+        '.obj | 
+         .webDomain = $pd | 
+         .webListen = "127.0.0.1" | 
+         .webCertFile = "" | 
+         .webKeyFile = "" |
+         (if $wbp == "" then .webBasePath = "/" else .webBasePath = "/" + $wbp + "/" end) |
+         .subEnable = true | 
+         .subDomain = $sd | 
+         .subListen = "127.0.0.1" | 
+         .subPort = $sp |
+         .subPath = "/" | 
+         .subURI = $su | 
+         .subJsonPath = "/json/" | 
+         .subJsonURI = $sju |
+         .subCertFile = "" | 
+         .subKeyFile = ""')
+    
+    local UPDATE_RESULT=$(api "$BASE/panel/setting/update" -d "$NEW" | jq -r '.success // empty')
+    
+    if [[ "$UPDATE_RESULT" != "true" ]]; then
+        echo -e "  ${red}setting/update failed.${plain}"
+        rm -f "$JAR"
+        return 1
+    fi
+
+    # Добавление Reality инбаунда
+    local IB
+    IB=$(jq -n --arg u "$UUID" --arg pv "$PRIV" --arg pb "$PUB" --arg sid "$SID" --arg sni "$SS" --arg sock "$SOCK" '{
+      enable:true,remark:"3x-ui VLESS",listen:"",port:443,protocol:"vless",expiryTime:0,total:0,
+      settings:{clients:[{id:$u,email:"3xui_user",flow:"xtls-rprx-vision",limitIp:0,totalGB:0,expiryTime:0,enable:true,tgId:0,subId:"3xui_user",comment:"",reset:0}],decryption:"none",encryption:"none",fallbacks:[]},
+      streamSettings:{network:"tcp",tcpSettings:{header:{type:"none"}},security:"reality",
+        externalProxy:[{forceTls:"same",dest:$sni,port:443,remark:""}],
+        realitySettings:{show:false,xver:1,target:$sock,serverNames:[$sni],privateKey:$pv,minClientVer:"",maxClientVer:"",maxTimediff:0,shortIds:[$sid],mldsa65Seed:"",settings:{publicKey:$pb,fingerprint:"firefox",serverName:"",spiderX:"/",mldsa65Verify:""}}},
+      sniffing:{enabled:true,destOverride:["http","tls","quic"],metadataOnly:false,routeOnly:false,ipsExcluded:[],domainsExcluded:[]}}')
+    
+    [[ "$(api "$BASE/panel/api/inbounds/add" -d "$IB"|jq -r '.success')" == "true" ]] || { 
+        echo -e "  ${red}inbound add failed.${plain}"
+        rm -f "$JAR"
+        return 1
+    }
+
+    # Hysteria2 инбаунд
+    local HYAUTH HYPASS
+    HYAUTH=$(gen_random_string 16)
+    HYPASS=$(gen_random_string 16)
+    
+    local HY
+    HY=$(jq -n --arg auth "$HYAUTH" --arg pass "$HYPASS" --arg sni "$SS" \
+        --arg cert "/etc/x-ui/ssl/$SS/fullchain.pem" --arg key "/etc/x-ui/ssl/$SS/privkey.pem" '{
+      enable:true,remark:"3x-ui Hysteria2",listen:"",port:27015,protocol:"hysteria",expiryTime:0,total:0,
+      settings:{clients:[{auth:$auth,password:$pass,email:"3xui_user",limitIp:0,totalGB:0,expiryTime:0,enable:true,tgId:0,subId:"3xui_user",comment:"",reset:0}],version:2},
+      streamSettings:{network:"hysteria",hysteriaSettings:{version:2,udpIdleTimeout:60},security:"tls",
+        externalProxy:[{forceTls:"same",dest:$sni,port:27015,remark:""}],
+        tlsSettings:{serverName:$sni,minVersion:"1.3",maxVersion:"1.3",cipherSuites:"",rejectUnknownSni:false,disableSystemRoot:false,enableSessionResumption:false,
+          certificates:[{certificateFile:$cert,keyFile:$key,oneTimeLoading:false,usage:"encipherment",buildChain:false,useFile:true}],
+          alpn:["h3"],echServerKeys:"",settings:{fingerprint:"chrome",echConfigList:"",pinnedPeerCertSha256:[]}},
+        finalmask:{quicParams:{congestion:"force-brutal",brutalUp:"650000000",brutalDown:"850000000",initStreamReceiveWindow:8388608,maxStreamReceiveWindow:8388608,initConnectionReceiveWindow:20971520,maxConnectionReceiveWindow:20971520,keepAlivePeriod:5,maxIncomingStreams:1024}}},
+      sniffing:{enabled:true,destOverride:["http","tls","quic"]}}')
+    
+    if [[ "$(api "$BASE/panel/api/inbounds/add" -d "$HY"|jq -r '.success')" == "true" ]]; then
+        echo -e "  ${green}✔${plain} $(t i_hy2)"
+    else
+        echo -e "  ${yellow}! Hysteria2 inbound add failed (Reality still works); add it manually if needed.${plain}"
+    fi
+
+    # Перезапуск служб
+    api "$BASE/panel/api/server/restartXrayService" -X POST > /dev/null
+    api "$BASE/panel/setting/restartPanel" -X POST > /dev/null
+    
+    rm -f "$JAR"
+    echo -e "  ${green}✔${plain} $(t i_preconfigured)"
+    return 0
+}
+
+# ============================================================================
+# ОСТАЛЬНЫЕ ФУНКЦИИ (без изменений)
+# ============================================================================
+
 rp_resolve_ip() {
     getent hosts "$1" 2> /dev/null | awk '{print $1}' | head -1
 }
@@ -567,75 +729,6 @@ server {
 EOF
 }
 
-_rp_preconfig() {
-    local U="$1" P="$2" PORT="$3" BP="$4" PD="$5" SD="$6" SS="$7" SP="$8" SOCK="$9" PANELPATH="${10}"
-    local BASE="http://127.0.0.1:${PORT}/${BP}" JAR; JAR=$(mktemp)
-    local CSRF ok i
-    for i in $(seq 1 20); do
-        CSRF=$(curl -s -c "$JAR" "$BASE/csrf-token" | jq -r '.obj // empty')
-        if [[ -n "$CSRF" ]]; then
-            ok=$(curl -s -c "$JAR" -b "$JAR" -H "X-CSRF-Token: $CSRF" -H 'Content-Type: application/json' \
-                -d "{\"username\":\"$U\",\"password\":\"$P\"}" "$BASE/login" | jq -r '.success // empty')
-            [[ "$ok" == "true" ]] && break
-        fi
-        sleep 0.5
-    done
-    [[ "$ok" == "true" ]] || { echo -e "  ${red}Panel API login failed (panel not ready at ${BASE}).${plain}"; rm -f "$JAR"; return 1; }
-    api() { curl -s -c "$JAR" -b "$JAR" -H "X-CSRF-Token: $CSRF" -H 'Content-Type: application/json' "$@"; }
-
-    local X PRIV PUB UUID SID
-    X=$(api "$BASE/panel/api/server/getNewX25519Cert"); PRIV=$(echo "$X"|jq -r '.obj.privateKey'); PUB=$(echo "$X"|jq -r '.obj.publicKey')
-    UUID=$(api "$BASE/panel/api/server/getNewUUID"|jq -r '.obj.uuid'); SID=$(openssl rand -hex 8)
-    [[ -n "$PRIV" && "$PRIV" != null && -n "$UUID" && "$UUID" != null ]] || { echo -e "  ${red}Key/UUID generation failed.${plain}"; rm -f "$JAR"; return 1; }
-
-    local WBP="$BP"; [[ "$PANELPATH" == "/" ]] && WBP=""
-    local ALL NEW
-    ALL=$(api "$BASE/panel/setting/all" -X POST)
-    NEW=$(echo "$ALL"|jq -c --arg pd "$PD" --arg sd "$SD" --arg su "https://$SD/" \
-        --arg sju "https://$SD/json/" --argjson sp "$SP" --arg wbp "$WBP" \
-        '.obj | .webDomain=$pd | .webListen="127.0.0.1" | .webCertFile="" | .webKeyFile=""
-              | (if $wbp=="" then .webBasePath="/" else . end)
-              | .subEnable=true | .subDomain=$sd | .subListen="127.0.0.1" | .subPort=$sp
-              | .subPath="/" | .subURI=$su | .subJsonPath="/json/" | .subJsonURI=$sju
-              | .subCertFile="" | .subKeyFile=""')
-    [[ "$(api "$BASE/panel/setting/update" -d "$NEW"|jq -r '.success')" == "true" ]] || { echo -e "  ${red}setting/update failed.${plain}"; rm -f "$JAR"; return 1; }
-
-    local IB
-    IB=$(jq -n --arg u "$UUID" --arg pv "$PRIV" --arg pb "$PUB" --arg sid "$SID" --arg sni "$SS" --arg sock "$SOCK" '{
-      enable:true,remark:"3x-ui VLESS",listen:"",port:443,protocol:"vless",expiryTime:0,total:0,
-      settings:{clients:[{id:$u,email:"3xui_user",flow:"xtls-rprx-vision",limitIp:0,totalGB:0,expiryTime:0,enable:true,tgId:0,subId:"3xui_user",comment:"",reset:0}],decryption:"none",encryption:"none",fallbacks:[]},
-      streamSettings:{network:"tcp",tcpSettings:{header:{type:"none"}},security:"reality",
-        externalProxy:[{forceTls:"same",dest:$sni,port:443,remark:""}],
-        realitySettings:{show:false,xver:1,target:$sock,serverNames:[$sni],privateKey:$pv,minClientVer:"",maxClientVer:"",maxTimediff:0,shortIds:[$sid],mldsa65Seed:"",settings:{publicKey:$pb,fingerprint:"firefox",serverName:"",spiderX:"/",mldsa65Verify:""}}},
-      sniffing:{enabled:true,destOverride:["http","tls","quic"],metadataOnly:false,routeOnly:false,ipsExcluded:[],domainsExcluded:[]}}')
-    [[ "$(api "$BASE/panel/api/inbounds/add" -d "$IB"|jq -r '.success')" == "true" ]] || { echo -e "  ${red}inbound add failed.${plain}"; rm -f "$JAR"; return 1; }
-
-    local HYAUTH HYPASS; HYAUTH=$(gen_random_string 16); HYPASS=$(gen_random_string 16)
-    local HY
-    HY=$(jq -n --arg auth "$HYAUTH" --arg pass "$HYPASS" --arg sni "$SS" \
-        --arg cert "/etc/x-ui/ssl/$SS/fullchain.pem" --arg key "/etc/x-ui/ssl/$SS/privkey.pem" '{
-      enable:true,remark:"3x-ui Hysteria2",listen:"",port:27015,protocol:"hysteria",expiryTime:0,total:0,
-      settings:{clients:[{auth:$auth,password:$pass,email:"3xui_user",limitIp:0,totalGB:0,expiryTime:0,enable:true,tgId:0,subId:"3xui_user",comment:"",reset:0}],version:2},
-      streamSettings:{network:"hysteria",hysteriaSettings:{version:2,udpIdleTimeout:60},security:"tls",
-        externalProxy:[{forceTls:"same",dest:$sni,port:27015,remark:""}],
-        tlsSettings:{serverName:$sni,minVersion:"1.3",maxVersion:"1.3",cipherSuites:"",rejectUnknownSni:false,disableSystemRoot:false,enableSessionResumption:false,
-          certificates:[{certificateFile:$cert,keyFile:$key,oneTimeLoading:false,usage:"encipherment",buildChain:false,useFile:true}],
-          alpn:["h3"],echServerKeys:"",settings:{fingerprint:"chrome",echConfigList:"",pinnedPeerCertSha256:[]}},
-        finalmask:{quicParams:{congestion:"force-brutal",brutalUp:"650000000",brutalDown:"850000000",initStreamReceiveWindow:8388608,maxStreamReceiveWindow:8388608,initConnectionReceiveWindow:20971520,maxConnectionReceiveWindow:20971520,keepAlivePeriod:5,maxIncomingStreams:1024}}},
-      sniffing:{enabled:true,destOverride:["http","tls","quic"]}}')
-    if [[ "$(api "$BASE/panel/api/inbounds/add" -d "$HY"|jq -r '.success')" == "true" ]]; then
-        echo -e "  ${green}✔${plain} $(t i_hy2)"
-    else
-        echo -e "  ${yellow}! Hysteria2 inbound add failed (Reality still works); add it manually if needed.${plain}"
-    fi
-
-    api "$BASE/panel/api/server/restartXrayService" -X POST > /dev/null
-    api "$BASE/panel/setting/restartPanel" -X POST > /dev/null
-    rm -f "$JAR"
-    echo -e "  ${green}✔${plain} $(t i_preconfigured)"
-    return 0
-}
-
 config_after_install() {
     RP_INSTALL_MODE="A"
     if [[ "$RP_INSTALL_MODE" == "A" ]]; then
@@ -713,7 +806,6 @@ install_x-ui() {
     fi
     chmod +x x-ui bin/xray-linux-$(arch)
 
-    # Install x-ui CLI menu — from the ORIGINAL 3x-ui repo
     if [ -f "x-ui.sh" ]; then
         cp -f x-ui.sh /usr/bin/x-ui
     else
