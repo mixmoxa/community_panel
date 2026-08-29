@@ -23,7 +23,7 @@ askp() { echo -e "${bold}${orange}$*${plain}"; }
 # ── Translations ─────────────────────────────────────────────────────────────
 T_EN[i_deps]="Installing dependencies";                  T_RU[i_deps]="Установка зависимостей"
 T_EN[i_bbr]="BBR enabled";                               T_RU[i_bbr]="BBR включен"
-T_EN[i_base]="3x-ui configured on port %s; reverse-proxy will run after start"; T_RU[i_base]="3x-ui настроена с портом %s, реверс-прокси запустится после старта"
+T_EN[i_base]="3x-ui v2.4.8 configured on port %s; reverse-proxy will run after start"; T_RU[i_base]="3x-ui v2.4.8 настроена с портом %s, реверс-прокси запустится после старта"
 T_EN[i_acme]="Installing acme.sh";                       T_RU[i_acme]="Установка acme.sh"
 T_EN[i_cert]="Issuing certificate for %s";               T_RU[i_cert]="Выпуск сертификата для %s"
 T_EN[i_cert_fail]="Certificate issue failed for %s";     T_RU[i_cert_fail]="Ошибка выпуска сертификата для %s"
@@ -31,7 +31,7 @@ T_EN[i_nginx]="Installing Nginx + JQ";                   T_RU[i_nginx]="Уста
 T_EN[i_startnginx]="Starting Nginx";                     T_RU[i_startnginx]="Запуск Nginx"
 T_EN[i_nginxtest]="Nginx config test failed:";           T_RU[i_nginxtest]="Ошибка проверки конфига Nginx:"
 T_EN[i_hy2]="Hysteria2 preconfigured inbound added";     T_RU[i_hy2]="Добавлен преднастроенный инбаунд Hysteria2"
-T_EN[i_preconfigured]="3x-ui successfully installed";    T_RU[i_preconfigured]="3x-ui успешно установлена"
+T_EN[i_preconfigured]="3x-ui v2.4.8 successfully installed"; T_RU[i_preconfigured]="3x-ui v2.4.8 успешно установлена"
 T_EN[p_dom_panel]="3x-ui domain:";                       T_RU[p_dom_panel]="Домен для 3x-ui:"
 T_EN[p_dom_sub]="Subscription page domain:";             T_RU[p_dom_sub]="Домен для подписок:"
 T_EN[p_dom_self]="Selfsteal/Reality domain:";            T_RU[p_dom_self]="Домен для сайта-заглушки:"
@@ -50,7 +50,7 @@ T_EN[s_decoy]="Selfsteal/Reality access link:";          T_RU[s_decoy]="Сайт
 T_EN[s_login]="Your login/password:";                    T_RU[s_login]="Ваш логин/пароль:"
 T_EN[s_entry]="secret cookie-gate link — save it!";      T_RU[s_entry]="секретная cookie-gate ссылка - сохраните!"
 T_EN[s_failed]="Reverse-proxy setup failed";             T_RU[s_failed]="Ошибка настройки реверс-прокси"
-T_EN[s_running]="3x-ui %s installed and running";        T_RU[s_running]="3x-ui %s установлена и работает"
+T_EN[s_running]="3x-ui v2.4.8 installed and running";    T_RU[s_running]="3x-ui v2.4.8 установлена и работает"
 T_EN[s_cli]="CLI manager commands are:";                 T_RU[s_cli]="Команды для управления:"
 
 # ── quiet-step UI ────────────────────────────────────────────────────────────
@@ -382,16 +382,72 @@ ssl_cert_issue() {
 }
 
 # ============================================================================
-# ИСПРАВЛЕННАЯ ФУНКЦИЯ _rp_preconfig
+# УСТАНОВКА ФИКСИРОВАННОЙ ВЕРСИИ 2.4.8
 # ============================================================================
+
+install_xui_fixed() {
+    local TAG_VERSION="v2.4.8"
+    
+    echo -e "  ${gray}Установка 3x-ui ${TAG_VERSION} (стабильная версия)...${plain}"
+    
+    # Остановка старой версии
+    systemctl stop x-ui 2>/dev/null
+    rm -rf ${xui_folder}
+    
+    # Скачивание фиксированной версии
+    local URL="https://github.com/MHSanaei/3x-ui/releases/download/${TAG_VERSION}/x-ui-linux-$(arch).tar.gz"
+    local FILE="/tmp/x-ui-linux-$(arch).tar.gz"
+    
+    curl -4fsSL -o "$FILE" "$URL"
+    if [[ $? -ne 0 ]]; then
+        echo -e "${red}Ошибка скачивания версии ${TAG_VERSION}${plain}"
+        echo -e "${yellow}Попробуйте установить последнюю версию:${plain}"
+        echo -e "  bash <(curl -Ls https://raw.githubusercontent.com/MHSanaei/3x-ui/main/install.sh)"
+        exit 1
+    fi
+    
+    # Распаковка
+    tar zxf "$FILE" -C /usr/local/
+    rm -f "$FILE"
+    
+    cd ${xui_folder} || exit 1
+    chmod +x x-ui x-ui.sh
+    
+    # Установка CLI
+    cp -f x-ui.sh /usr/bin/x-ui
+    chmod +x /usr/bin/x-ui
+    
+    # Установка службы
+    if [[ -f "x-ui.service.debian" ]]; then
+        cp -f x-ui.service.debian ${xui_service}/x-ui.service
+    else
+        curl -4fsSL -o ${xui_service}/x-ui.service \
+            "https://raw.githubusercontent.com/MHSanaei/3x-ui/refs/tags/${TAG_VERSION}/x-ui.service.debian"
+    fi
+    
+    systemctl daemon-reload
+    systemctl enable x-ui
+    
+    echo -e "  ${green}✔ 3x-ui ${TAG_VERSION} установлена${plain}"
+}
+
+# ============================================================================
+# ОСТАЛЬНЫЕ ФУНКЦИИ (адаптированы под старую версию)
+# ============================================================================
+
+rp_resolve_ip() {
+    getent hosts "$1" 2> /dev/null | awk '{print $1}' | head -1
+}
+
 _rp_preconfig() {
     local U="$1" P="$2" PORT="$3" BP="$4" PD="$5" SD="$6" SS="$7" SP="$8" SOCK="$9" PANELPATH="${10}"
-    local BASE="http://127.0.0.1:${PORT}/${BP}" JAR; JAR=$(mktemp)
+    local BASE="http://127.0.0.1:${PORT}/${BP}"
+    local JAR=$(mktemp)
     local CSRF ok i
-    
+
     echo -e "  ${gray}API: ожидание запуска панели...${plain}"
-    
-    # Ожидание запуска панели с увеличенным таймаутом
+
+    # Ожидание запуска панели
     for i in $(seq 1 30); do
         if curl -s -o /dev/null -w "%{http_code}" "$BASE/csrf-token" | grep -q "200"; then
             echo -e "  ${gray}API: панель запущена${plain}"
@@ -399,7 +455,7 @@ _rp_preconfig() {
         fi
         sleep 1
     done
-    
+
     # Получение CSRF токена
     for i in $(seq 1 10); do
         CSRF=$(curl -s -c "$JAR" "$BASE/csrf-token" | jq -r '.obj // empty')
@@ -409,14 +465,14 @@ _rp_preconfig() {
         fi
         sleep 1
     done
-    
+
     if [[ -z "$CSRF" || "$CSRF" == "null" ]]; then
         echo -e "  ${red}Не удалось получить CSRF токен${plain}"
         rm -f "$JAR"
         return 1
     fi
-    
-    # Логин в панель
+
+    # Логин
     for i in $(seq 1 10); do
         ok=$(curl -s -c "$JAR" -b "$JAR" \
             -H "X-CSRF-Token: $CSRF" \
@@ -429,13 +485,13 @@ _rp_preconfig() {
         fi
         sleep 1
     done
-    
+
     if [[ "$ok" != "true" ]]; then
-        echo -e "  ${red}Panel API login failed (panel not ready at ${BASE}).${plain}"
+        echo -e "  ${red}Panel API login failed${plain}"
         rm -f "$JAR"
         return 1
     fi
-    
+
     api() { 
         curl -s -b "$JAR" -H "X-CSRF-Token: $CSRF" -H "Content-Type: application/json" "$@"
     }
@@ -447,20 +503,20 @@ _rp_preconfig() {
     PUB=$(echo "$X"|jq -r '.obj.publicKey')
     UUID=$(api "$BASE/panel/api/server/getNewUUID"|jq -r '.obj.uuid')
     SID=$(openssl rand -hex 8)
-    
+
     [[ -n "$PRIV" && "$PRIV" != null && -n "$UUID" && "$UUID" != null ]] || { 
         echo -e "  ${red}Key/UUID generation failed.${plain}"
         rm -f "$JAR"
         return 1
     }
 
-    # Настройка панели через API
+    # Настройка панели
     local WBP="$BP"
     [[ "$PANELPATH" == "/" ]] && WBP=""
-    
+
     local ALL NEW
     ALL=$(api "$BASE/panel/setting/all" -X POST)
-    
+
     NEW=$(echo "$ALL" | jq -c \
         --arg pd "$PD" \
         --arg sd "$SD" \
@@ -484,25 +540,25 @@ _rp_preconfig() {
          .subJsonURI = $sju |
          .subCertFile = "" | 
          .subKeyFile = ""')
-    
+
     local UPDATE_RESULT=$(api "$BASE/panel/setting/update" -d "$NEW" | jq -r '.success // empty')
-    
+
     if [[ "$UPDATE_RESULT" != "true" ]]; then
         echo -e "  ${red}setting/update failed.${plain}"
         rm -f "$JAR"
         return 1
     fi
 
-    # Добавление Reality инбаунда
+    # Добавление Reality инбаунда (совместимый с v2.4.8)
     local IB
     IB=$(jq -n --arg u "$UUID" --arg pv "$PRIV" --arg pb "$PUB" --arg sid "$SID" --arg sni "$SS" --arg sock "$SOCK" '{
       enable:true,remark:"3x-ui VLESS",listen:"",port:443,protocol:"vless",expiryTime:0,total:0,
       settings:{clients:[{id:$u,email:"3xui_user",flow:"xtls-rprx-vision",limitIp:0,totalGB:0,expiryTime:0,enable:true,tgId:0,subId:"3xui_user",comment:"",reset:0}],decryption:"none",encryption:"none",fallbacks:[]},
       streamSettings:{network:"tcp",tcpSettings:{header:{type:"none"}},security:"reality",
         externalProxy:[{forceTls:"same",dest:$sni,port:443,remark:""}],
-        realitySettings:{show:false,xver:1,target:$sock,serverNames:[$sni],privateKey:$pv,minClientVer:"",maxClientVer:"",maxTimediff:0,shortIds:[$sid],mldsa65Seed:"",settings:{publicKey:$pb,fingerprint:"firefox",serverName:"",spiderX:"/",mldsa65Verify:""}}},
+        realitySettings:{show:false,xver:1,target:$sock,serverNames:[$sni],privateKey:$pv,minClientVer:"",maxClientVer:"",maxTimediff:0,shortIds:[$sid],settings:{publicKey:$pb,fingerprint:"firefox",serverName:"",spiderX:"/",mldsa65Verify:""}}},
       sniffing:{enabled:true,destOverride:["http","tls","quic"],metadataOnly:false,routeOnly:false,ipsExcluded:[],domainsExcluded:[]}}')
-    
+
     [[ "$(api "$BASE/panel/api/inbounds/add" -d "$IB"|jq -r '.success')" == "true" ]] || { 
         echo -e "  ${red}inbound add failed.${plain}"
         rm -f "$JAR"
@@ -513,7 +569,7 @@ _rp_preconfig() {
     local HYAUTH HYPASS
     HYAUTH=$(gen_random_string 16)
     HYPASS=$(gen_random_string 16)
-    
+
     local HY
     HY=$(jq -n --arg auth "$HYAUTH" --arg pass "$HYPASS" --arg sni "$SS" \
         --arg cert "/etc/x-ui/ssl/$SS/fullchain.pem" --arg key "/etc/x-ui/ssl/$SS/privkey.pem" '{
@@ -526,28 +582,20 @@ _rp_preconfig() {
           alpn:["h3"],echServerKeys:"",settings:{fingerprint:"chrome",echConfigList:"",pinnedPeerCertSha256:[]}},
         finalmask:{quicParams:{congestion:"force-brutal",brutalUp:"650000000",brutalDown:"850000000",initStreamReceiveWindow:8388608,maxStreamReceiveWindow:8388608,initConnectionReceiveWindow:20971520,maxConnectionReceiveWindow:20971520,keepAlivePeriod:5,maxIncomingStreams:1024}}},
       sniffing:{enabled:true,destOverride:["http","tls","quic"]}}')
-    
+
     if [[ "$(api "$BASE/panel/api/inbounds/add" -d "$HY"|jq -r '.success')" == "true" ]]; then
         echo -e "  ${green}✔${plain} $(t i_hy2)"
     else
         echo -e "  ${yellow}! Hysteria2 inbound add failed (Reality still works); add it manually if needed.${plain}"
     fi
 
-    # Перезапуск служб
+    # Перезапуск
     api "$BASE/panel/api/server/restartXrayService" -X POST > /dev/null
     api "$BASE/panel/setting/restartPanel" -X POST > /dev/null
-    
+
     rm -f "$JAR"
     echo -e "  ${green}✔${plain} $(t i_preconfigured)"
     return 0
-}
-
-# ============================================================================
-# ОСТАЛЬНЫЕ ФУНКЦИИ (без изменений)
-# ============================================================================
-
-rp_resolve_ip() {
-    getent hosts "$1" 2> /dev/null | awk '{print $1}' | head -1
 }
 
 setup_reverse_proxy() {
@@ -741,205 +789,6 @@ config_after_install() {
     fi
 }
 
-install_x-ui() {
-    cd ${xui_folder%/x-ui}/
-
-    if [ $# == 0 ]; then
-        resolve_latest_tag() {
-            curl ${1:-} -fsSLI -o /dev/null -w '%{url_effective}' \
-                "https://github.com/MHSanaei/3x-ui/releases/latest" 2> /dev/null \
-                | grep -oE '/tag/[^/]+$' | sed 's|^/tag/||'
-        }
-        tag_version=$(resolve_latest_tag)
-        if [[ ! -n "$tag_version" ]]; then
-            echo -e "${yellow}Trying to fetch version with IPv4...${plain}"
-            tag_version=$(resolve_latest_tag -4)
-            if [[ ! -n "$tag_version" ]]; then
-                echo -e "${red}Failed to resolve the latest 3x-ui release (no published release yet, or GitHub is unreachable), please try it later${plain}"
-                exit 1
-            fi
-        fi
-        echo -e "  ${gray}3x-ui ${tag_version} — installing…${plain}"
-        curl -4fsSLRo ${xui_folder}-linux-$(arch).tar.gz https://github.com/MHSanaei/3x-ui/releases/download/${tag_version}/x-ui-linux-$(arch).tar.gz
-        if [[ $? -ne 0 ]]; then
-            echo -e "${red}Downloading x-ui failed, please be sure that your server can access GitHub ${plain}"
-            exit 1
-        fi
-    else
-        tag_version=$1
-        tag_version_numeric=${tag_version#v}
-        min_version="2.3.5"
-
-        if [[ "$(printf '%s\n' "$min_version" "$tag_version_numeric" | sort -V | head -n1)" != "$min_version" ]]; then
-            echo -e "${red}Please use a newer version (at least v2.3.5). Exiting installation.${plain}"
-            exit 1
-        fi
-
-        url="https://github.com/MHSanaei/3x-ui/releases/download/${tag_version}/x-ui-linux-$(arch).tar.gz"
-        echo -e "Beginning to install 3x-ui $1"
-        curl -4fsSLRo ${xui_folder}-linux-$(arch).tar.gz ${url}
-        if [[ $? -ne 0 ]]; then
-            echo -e "${red}Download 3x-ui $1 failed, please check if the version exists ${plain}"
-            exit 1
-        fi
-    fi
-
-    if [[ -e ${xui_folder}/ ]]; then
-        if [[ $release == "alpine" ]]; then
-            rc-service x-ui stop
-        else
-            systemctl stop x-ui
-        fi
-        rm ${xui_folder}/ -rf
-    fi
-
-    tar zxf x-ui-linux-$(arch).tar.gz
-    rm x-ui-linux-$(arch).tar.gz -f
-
-    cd x-ui
-    chmod +x x-ui
-    chmod +x x-ui.sh
-
-    if [[ $(arch) == "armv5" || $(arch) == "armv6" || $(arch) == "armv7" ]]; then
-        mv bin/xray-linux-$(arch) bin/xray-linux-arm
-        chmod +x bin/xray-linux-arm
-    fi
-    chmod +x x-ui bin/xray-linux-$(arch)
-
-    if [ -f "x-ui.sh" ]; then
-        cp -f x-ui.sh /usr/bin/x-ui
-    else
-        echo -e "${yellow}x-ui.sh not found in the tarball, downloading the ${tag_version} copy...${plain}"
-        curl -4fLRo /usr/bin/x-ui "https://raw.githubusercontent.com/MHSanaei/3x-ui/refs/tags/${tag_version}/x-ui.sh"
-        if [[ $? -ne 0 ]]; then
-            echo -e "${red}Failed to download x-ui.sh${plain}"
-            exit 1
-        fi
-    fi
-    chmod +x /usr/bin/x-ui
-    mkdir -p /var/log/x-ui
-    config_after_install
-
-    if [ -d "/etc/.git" ]; then
-        if [ -f "/etc/.gitignore" ]; then
-            if ! grep -q "x-ui/x-ui.db" "/etc/.gitignore"; then
-                echo "" >> "/etc/.gitignore"
-                echo "x-ui/x-ui.db" >> "/etc/.gitignore"
-                echo -e "${green}Added x-ui.db to /etc/.gitignore for etckeeper${plain}"
-            fi
-        else
-            echo "x-ui/x-ui.db" > "/etc/.gitignore"
-            echo -e "${green}Created /etc/.gitignore and added x-ui.db for etckeeper${plain}"
-        fi
-    fi
-
-    if [[ $release == "alpine" ]]; then
-        curl -4fLRo /etc/init.d/x-ui https://raw.githubusercontent.com/MHSanaei/3x-ui/refs/tags/${tag_version}/x-ui.rc
-        if [[ $? -ne 0 ]]; then
-            echo -e "${red}Failed to download x-ui.rc${plain}"
-            exit 1
-        fi
-        chmod +x /etc/init.d/x-ui
-        rc-update add x-ui
-        rc-service x-ui start
-    else
-        service_installed=false
-
-        if [ -f "x-ui.service" ]; then
-            echo -e "${green}Found x-ui.service in extracted files, installing...${plain}"
-            cp -f x-ui.service ${xui_service}/ > /dev/null 2>&1
-            if [[ $? -eq 0 ]]; then
-                service_installed=true
-            fi
-        fi
-
-        if [ "$service_installed" = false ]; then
-            case "${release}" in
-                ubuntu | debian | armbian)
-                    if [ -f "x-ui.service.debian" ]; then
-                        echo -e "${green}Found x-ui.service.debian in extracted files, installing...${plain}"
-                        cp -f x-ui.service.debian ${xui_service}/x-ui.service > /dev/null 2>&1
-                        if [[ $? -eq 0 ]]; then
-                            service_installed=true
-                        fi
-                    fi
-                    ;;
-                arch | manjaro | parch)
-                    if [ -f "x-ui.service.arch" ]; then
-                        echo -e "${green}Found x-ui.service.arch in extracted files, installing...${plain}"
-                        cp -f x-ui.service.arch ${xui_service}/x-ui.service > /dev/null 2>&1
-                        if [[ $? -eq 0 ]]; then
-                            service_installed=true
-                        fi
-                    fi
-                    ;;
-                *)
-                    if [ -f "x-ui.service.rhel" ]; then
-                        echo -e "${green}Found x-ui.service.rhel in extracted files, installing...${plain}"
-                        cp -f x-ui.service.rhel ${xui_service}/x-ui.service > /dev/null 2>&1
-                        if [[ $? -eq 0 ]]; then
-                            service_installed=true
-                        fi
-                    fi
-                    ;;
-            esac
-        fi
-
-        if [ "$service_installed" = false ]; then
-            echo -e "${yellow}Service files not found in tar.gz, downloading from GitHub...${plain}"
-            case "${release}" in
-                ubuntu | debian | armbian)
-                    curl -4fLRo ${xui_service}/x-ui.service https://raw.githubusercontent.com/MHSanaei/3x-ui/refs/tags/${tag_version}/x-ui.service.debian > /dev/null 2>&1
-                    ;;
-                arch | manjaro | parch)
-                    curl -4fLRo ${xui_service}/x-ui.service https://raw.githubusercontent.com/MHSanaei/3x-ui/refs/tags/${tag_version}/x-ui.service.arch > /dev/null 2>&1
-                    ;;
-                *)
-                    curl -4fLRo ${xui_service}/x-ui.service https://raw.githubusercontent.com/MHSanaei/3x-ui/refs/tags/${tag_version}/x-ui.service.rhel > /dev/null 2>&1
-                    ;;
-            esac
-
-            if [[ $? -ne 0 ]]; then
-                echo -e "${red}Failed to install x-ui.service from GitHub${plain}"
-                exit 1
-            fi
-            service_installed=true
-        fi
-
-        if [ "$service_installed" = true ]; then
-            chown root:root ${xui_service}/x-ui.service > /dev/null 2>&1
-            chmod 644 ${xui_service}/x-ui.service > /dev/null 2>&1
-            systemctl daemon-reload > /dev/null 2>&1
-            systemctl enable x-ui > /dev/null 2>&1
-            systemctl start x-ui > /dev/null 2>&1
-            echo -e "  ${green}✔${plain} Setting up service"
-        else
-            echo -e "  ${red}✗${plain} Failed to install x-ui.service file"
-            exit 1
-        fi
-    fi
-
-    if [[ "$RP_INSTALL_MODE" == "A" ]]; then
-        local i
-        for i in $(seq 1 30); do
-            curl -fsS -o /dev/null "http://127.0.0.1:${RP_PORT}/${RP_BP}/csrf-token" 2> /dev/null && break
-            sleep 0.5
-        done
-        setup_reverse_proxy "$RP_U" "$RP_P" "$RP_PORT" "$RP_BP" \
-            || echo -e "${red}$(t s_failed)${plain}"
-    fi
-
-    echo -e "${green}✔ $(printf "$(t s_running)" "${tag_version}")${plain}"
-    echo
-    echo -e "  ${gray}$(t s_cli)${plain}"
-    echo -e "    ${blue}x-ui${plain}                    admin management menu"
-    echo -e "    ${blue}x-ui start|stop|restart${plain} service control"
-    echo -e "    ${blue}x-ui status|settings${plain}    status / current settings"
-    echo -e "    ${blue}x-ui log${plain}                panel logs"
-    echo -e "    ${blue}x-ui update|uninstall${plain}   update / remove"
-    echo
-}
-
 enable_bbr_default() {
     local f=/etc/sysctl.d/99-xui-bbr.conf
     grep -q '^net.ipv4.tcp_congestion_control=bbr' "$f" 2>/dev/null && return 0
@@ -971,4 +820,24 @@ echo -e "  ${gray}Running…${plain}"
 choose_language
 install_base
 enable_bbr_default
-install_x-ui $1
+install_xui_fixed
+
+# Настройка
+config_after_install
+
+# Ожидание запуска
+sleep 3
+
+# Настройка reverse-proxy
+setup_reverse_proxy "$RP_U" "$RP_P" "$RP_PORT" "$RP_BP" \
+    || echo -e "${red}$(t s_failed)${plain}"
+
+echo -e "${green}✔ $(printf "$(t s_running)" "v2.4.8")${plain}"
+echo
+echo -e "  ${gray}$(t s_cli)${plain}"
+echo -e "    ${blue}x-ui${plain}                    admin management menu"
+echo -e "    ${blue}x-ui start|stop|restart${plain} service control"
+echo -e "    ${blue}x-ui status|settings${plain}    status / current settings"
+echo -e "    ${blue}x-ui log${plain}                panel logs"
+echo -e "    ${blue}x-ui update|uninstall${plain}   update / remove"
+echo
