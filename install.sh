@@ -23,7 +23,7 @@ askp() { echo -e "${bold}${orange}$*${plain}"; }
 # ── Translations ─────────────────────────────────────────────────────────────
 T_EN[i_deps]="Installing dependencies";                  T_RU[i_deps]="Установка зависимостей"
 T_EN[i_bbr]="BBR enabled";                               T_RU[i_bbr]="BBR включен"
-T_EN[i_base]="3x-ui v2.4.8 configured on port %s; reverse-proxy will run after start"; T_RU[i_base]="3x-ui v2.4.8 настроена с портом %s, реверс-прокси запустится после старта"
+T_EN[i_base]="3x-ui v2.4.7 configured on port %s; reverse-proxy will run after start"; T_RU[i_base]="3x-ui v2.4.7 настроена с портом %s, реверс-прокси запустится после старта"
 T_EN[i_acme]="Installing acme.sh";                       T_RU[i_acme]="Установка acme.sh"
 T_EN[i_cert]="Issuing certificate for %s";               T_RU[i_cert]="Выпуск сертификата для %s"
 T_EN[i_cert_fail]="Certificate issue failed for %s";     T_RU[i_cert_fail]="Ошибка выпуска сертификата для %s"
@@ -31,7 +31,7 @@ T_EN[i_nginx]="Installing Nginx + JQ";                   T_RU[i_nginx]="Уста
 T_EN[i_startnginx]="Starting Nginx";                     T_RU[i_startnginx]="Запуск Nginx"
 T_EN[i_nginxtest]="Nginx config test failed:";           T_RU[i_nginxtest]="Ошибка проверки конфига Nginx:"
 T_EN[i_hy2]="Hysteria2 preconfigured inbound added";     T_RU[i_hy2]="Добавлен преднастроенный инбаунд Hysteria2"
-T_EN[i_preconfigured]="3x-ui v2.4.8 successfully installed"; T_RU[i_preconfigured]="3x-ui v2.4.8 успешно установлена"
+T_EN[i_preconfigured]="3x-ui v2.4.7 successfully installed"; T_RU[i_preconfigured]="3x-ui v2.4.7 успешно установлена"
 T_EN[p_dom_panel]="3x-ui domain:";                       T_RU[p_dom_panel]="Домен для 3x-ui:"
 T_EN[p_dom_sub]="Subscription page domain:";             T_RU[p_dom_sub]="Домен для подписок:"
 T_EN[p_dom_self]="Selfsteal/Reality domain:";            T_RU[p_dom_self]="Домен для сайта-заглушки:"
@@ -50,7 +50,7 @@ T_EN[s_decoy]="Selfsteal/Reality access link:";          T_RU[s_decoy]="Сайт
 T_EN[s_login]="Your login/password:";                    T_RU[s_login]="Ваш логин/пароль:"
 T_EN[s_entry]="secret cookie-gate link — save it!";      T_RU[s_entry]="секретная cookie-gate ссылка - сохраните!"
 T_EN[s_failed]="Reverse-proxy setup failed";             T_RU[s_failed]="Ошибка настройки реверс-прокси"
-T_EN[s_running]="3x-ui v2.4.8 installed and running";    T_RU[s_running]="3x-ui v2.4.8 установлена и работает"
+T_EN[s_running]="3x-ui v2.4.7 installed and running";    T_RU[s_running]="3x-ui v2.4.7 установлена и работает"
 T_EN[s_cli]="CLI manager commands are:";                 T_RU[s_cli]="Команды для управления:"
 
 # ── quiet-step UI ────────────────────────────────────────────────────────────
@@ -382,11 +382,11 @@ ssl_cert_issue() {
 }
 
 # ============================================================================
-# УСТАНОВКА ФИКСИРОВАННОЙ ВЕРСИИ 2.4.8
+# УСТАНОВКА ФИКСИРОВАННОЙ ВЕРСИИ 2.4.7 (существует в релизах)
 # ============================================================================
 
 install_xui_fixed() {
-    local TAG_VERSION="v2.4.8"
+    local TAG_VERSION="v2.4.7"
     
     echo -e "  ${gray}Установка 3x-ui ${TAG_VERSION} (стабильная версия)...${plain}"
     
@@ -432,7 +432,7 @@ install_xui_fixed() {
 }
 
 # ============================================================================
-# ОСТАЛЬНЫЕ ФУНКЦИИ (адаптированы под старую версию)
+# ОСТАЛЬНЫЕ ФУНКЦИИ
 # ============================================================================
 
 rp_resolve_ip() {
@@ -549,7 +549,7 @@ _rp_preconfig() {
         return 1
     fi
 
-    # Добавление Reality инбаунда (совместимый с v2.4.8)
+    # Добавление Reality инбаунда (совместимый с v2.4.7)
     local IB
     IB=$(jq -n --arg u "$UUID" --arg pv "$PRIV" --arg pb "$PUB" --arg sid "$SID" --arg sni "$SS" --arg sock "$SOCK" '{
       enable:true,remark:"3x-ui VLESS",listen:"",port:443,protocol:"vless",expiryTime:0,total:0,
@@ -808,7 +808,7 @@ choose_language() {
     local c=""
     echo
     echo -e "  ${green}Select CLI locale / Выберите язык CLI:${plain}"
-    echo -e "    ${green}1${plain}. English"
+    echo-e "    ${green}1${plain}. English"
     echo -e "    ${green}2${plain}. Русский"
     [[ -t 0 ]] && read -rp "  [1-2] (default 1): " c
     case "$c" in 2) XUI_LANG="ru" ;; *) XUI_LANG="en" ;; esac
@@ -832,7 +832,7 @@ sleep 3
 setup_reverse_proxy "$RP_U" "$RP_P" "$RP_PORT" "$RP_BP" \
     || echo -e "${red}$(t s_failed)${plain}"
 
-echo -e "${green}✔ $(printf "$(t s_running)" "v2.4.8")${plain}"
+echo -e "${green}✔ $(printf "$(t s_running)" "v2.4.7")${plain}"
 echo
 echo -e "  ${gray}$(t s_cli)${plain}"
 echo -e "    ${blue}x-ui${plain}                    admin management menu"
